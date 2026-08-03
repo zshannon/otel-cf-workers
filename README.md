@@ -5,7 +5,7 @@ An OpenTelemetry compatible library for instrumenting and exporting traces from 
 ## Getting started
 
 ```bash
-npm install @microlabs/otel-cf-workers @opentelemetry/api
+npm install @zshannon/otel-cf-workers @opentelemetry/api
 ```
 
 > [!IMPORTANT]
@@ -18,13 +18,13 @@ compatibility_flags = [ "nodejs_compat" ]
 > [!IMPORTANT]
 > As of version 1.0.0-rc.52, we are no longer providing a CommonJS build. It is already hard enough trying to write a library that deals with all of Cloudflare's functionality over every single combination of compatibility flags and dates. Combining that with two different build is just too much. If you really need CommonJS support, please create a ticket (if there isn't already) and describe your use-case.
 
-For a simple setup example with configuration examples, have a look at the [Quickstart Example](https://github.com/evanderkoogh/otel-cf-workers/tree/main/examples/worker)
+For a simple setup example with configuration examples, have a look at the [Quickstart Example](https://github.com/zshannon/otel-cf-workers/tree/main/examples/worker)
 
 ### Code example
 
 ```typescript
 import { trace } from '@opentelemetry/api'
-import { instrument, ResolveConfigFn } from '@microlabs/otel-cf-workers'
+import { instrument, ResolveConfigFn } from '@zshannon/otel-cf-workers'
 
 export interface Env {
 	HONEYCOMB_API_KEY: string
@@ -68,7 +68,7 @@ See the quick start code sample for an example of how it works.
 Instrumenting Durable Objects work very similar to the regular Worker auto-instrumentation. Instead of wrapping the handler in an `instrument` call, you wrap the Durable Object class with the `instrumentDO` function.
 
 ```typescript
-import { instrumentDO, PartialTraceConfig } from '@microlabs/otel-cf-workers'
+import { instrumentDO, PartialTraceConfig } from '@zshannon/otel-cf-workers'
 
 const config: ResolveConfigFn = (env: Env, _trigger) => {
 	return {
@@ -128,7 +128,7 @@ const handler = {
 
 ## Configuration
 
-For configuration you can either pass in a [TraceConfig](https://github.com/evanderkoogh/otel-cf-workers/blob/0da125a4e16ff13e49f8e486340eb6080e631eb9/src/types.ts#L24C18-L24C29) or a function that takes the Environment and the trigger for this particular trace and returns a `TraceConfig`.
+For configuration you can either pass in a [TraceConfig](https://github.com/zshannon/otel-cf-workers/blob/main/src/types.ts) or a function that takes the Environment and the trigger for this particular trace and returns a `TraceConfig`.
 
 Because the configuration function is run separately for every new invocation, it is possible to tailor your configuration for every type of request. So it is for example possible to have a much lower sampling ratio for your healthchecks than actual API requests.
 

@@ -46,12 +46,12 @@ export function proxyExecutionContext(context: ExecutionContext): ContextAndTrac
 	return { ctx, tracker }
 }
 
-export async function exportSpans(tracker?: PromiseTracker) {
+export async function exportSpans(traceId?: string, tracker?: PromiseTracker) {
 	const tracer = trace.getTracer('export')
 	if (tracer instanceof WorkerTracer) {
 		await scheduler.wait(1)
 		await tracker?.wait()
-		await tracer.forceFlush()
+		await tracer.forceFlush(traceId)
 	} else {
 		console.error('The global tracer is not of type WorkerTracer and can not export spans')
 	}

@@ -14,8 +14,9 @@ import { DOClass, instrumentDOClass } from './instrumentation/do.js'
 import { scheduledInstrumentation } from './instrumentation/scheduled.js'
 import { instrumentEnv } from './instrumentation/env.js'
 import { versionAttributes } from './instrumentation/version.js'
-import { PromiseTracker, proxyExecutionContext } from './instrumentation/common.js'
+import { exportSpans, proxyExecutionContext } from './instrumentation/common.js'
 import { emailInstrumentation } from './instrumentation/email.js'
+import { EntrypointClass, instrumentEntrypointClass } from './instrumentation/entrypoint.js'
 
 //@ts-ignore
 import * as versions from '../versions.json'
@@ -64,8 +65,8 @@ const createResource = (config: ResolvedTraceConfig, versionMeta?: WorkerVersion
 		'cloud.region': 'earth',
 		'faas.max_memory': 134217728,
 		'telemetry.sdk.language': 'js',
-		'telemetry.sdk.name': '@microlabs/otel-cf-workers',
-		'telemetry.sdk.version': versions['@microlabs/otel-cf-workers'],
+		'telemetry.sdk.name': '@zshannon/otel-cf-workers',
+		'telemetry.sdk.version': versions['@zshannon/otel-cf-workers'],
 		'telemetry.sdk.build.node_version': versions['node'],
 		'cf.worker.version.id': versionMeta?.id,
 		'cf.worker.version.tag': versionMeta?.tag,
@@ -111,17 +112,6 @@ function createInitialiser(config: ConfigurationOption): Initialiser {
 			init(conf)
 			return conf
 		}
-	}
-}
-
-export async function exportSpans(traceId: string, tracker?: PromiseTracker) {
-	const tracer = trace.getTracer('export')
-	if (tracer instanceof WorkerTracer) {
-		await scheduler.wait(1)
-		await tracker?.wait()
-		await tracer.forceFlush(traceId)
-	} else {
-		console.error('The global tracer is not of type WorkerTracer and can not export spans')
 	}
 }
 
@@ -228,5 +218,11 @@ export function instrumentDO(doClass: DOClass, config: ConfigurationOption) {
 
 	return instrumentDOClass(doClass, initialiser)
 }
+
+export function instrumentEntrypoint<C extends EntrypointClass>(entrypointClass: C, config: ConfigurationOption): C {
+	return instrumentEntrypointClass(entrypointClass, createInitialiser(config))
+}
+
+export { exportSpans } from './instrumentation/common.js'
 
 export const __unwrappedFetch = unwrap(fetch)
