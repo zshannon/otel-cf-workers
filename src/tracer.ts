@@ -57,7 +57,7 @@ export class WorkerTracer implements Tracer {
 			context = trace.deleteSpan(context)
 		}
 
-		const config = getActiveConfig()
+		const config = getActiveConfig(context)
 		if (!config) throw new Error('Config is undefined. This is a bug in the instrumentation logic')
 
 		const parentSpanContext = trace.getSpan(context)?.spanContext()

@@ -1,4 +1,4 @@
-import { context } from '@opentelemetry/api'
+import { Context, context } from '@opentelemetry/api'
 import {
 	ExporterConfig,
 	isSpanProcessorConfig,
@@ -22,8 +22,8 @@ export function setConfig(config: ResolvedTraceConfig, ctx = context.active()) {
 	return ctx.setValue(configSymbol, config)
 }
 
-export function getActiveConfig(): ResolvedTraceConfig | undefined {
-	const config = context.active().getValue(configSymbol) as ResolvedTraceConfig
+export function getActiveConfig(ctx: Context = context.active()): ResolvedTraceConfig | undefined {
+	const config = ctx.getValue(configSymbol) as ResolvedTraceConfig
 	return config || undefined
 }
 
