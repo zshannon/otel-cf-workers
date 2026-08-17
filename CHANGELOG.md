@@ -1,4 +1,14 @@
-# @microlabs/otel-cf-workers
+# @zshannon/otel-cf-workers
+
+## 1.0.0-rc.53
+
+### Minor Changes
+
+- f9b7b00: Keep HTTP, Durable Object, and WorkerEntrypoint spans open through streamed response completion. Trace service-binding RPC clients and WorkerEntrypoint servers through configurable standard OpenTelemetry carriers, and keep provider configuration available to application spans in deferred Workers callbacks.
+
+### Patch Changes
+
+- daed2a0: Resolve tracer configuration from explicit context.
 
 ## 1.0.0-rc.52
 
