@@ -1,4 +1,4 @@
-import { context as api_context, Exception, propagation, SpanStatusCode, trace } from '@opentelemetry/api'
+import { context as api_context, propagation, trace } from '@opentelemetry/api'
 import { Resource, resourceFromAttributes } from '@opentelemetry/resources'
 
 import { Initialiser, parseConfig, setConfig } from './config.js'
@@ -14,7 +14,7 @@ import { DOClass, instrumentDOClass } from './instrumentation/do.js'
 import { scheduledInstrumentation } from './instrumentation/scheduled.js'
 import { instrumentEnv } from './instrumentation/env.js'
 import { versionAttributes } from './instrumentation/version.js'
-import { exportSpans, proxyExecutionContext } from './instrumentation/common.js'
+import { exportSpans, proxyExecutionContext, recordSpanError } from './instrumentation/common.js'
 import { emailInstrumentation } from './instrumentation/email.js'
 import { EntrypointClass, instrumentEntrypointClass } from './instrumentation/entrypoint.js'
 
@@ -33,7 +33,7 @@ type HandlerFn<T extends Trigger, E extends Env, R extends any> = (
 	trigger: T,
 	env: E,
 	ctx: ExecutionContext,
-) => R | Promise<R>
+) => OrPromise<R>
 
 export function isRequest(trigger: Trigger): trigger is Request {
 	return trigger instanceof Request
@@ -93,7 +93,7 @@ function init(config: ResolvedTraceConfig): void {
 		propagation.setGlobalPropagator(config.propagator)
 		const resource = createResource(config, findVersionMeta())
 
-		const provider = new WorkerTracerProvider(config.spanProcessors, resource)
+		const provider = new WorkerTracerProvider(config.spanProcessors, resource, config)
 		provider.register()
 		initialised = true
 	}
@@ -140,8 +140,9 @@ function createHandlerFlowFn<T extends Trigger, E extends Env, R extends any>(
 
 		const parentContext = spanContext || api_context.active()
 		const result = tracer.startActiveSpan(name, options, parentContext, async (span) => {
+			let completion: Promise<void> | undefined
 			try {
-				const result = await handlerFn(instrumentedTrigger, proxiedEnv, proxiedCtx)
+				let result = (await handlerFn(instrumentedTrigger, proxiedEnv, proxiedCtx)) as R
 
 				if (instrumentation.getAttributesFromResult) {
 					const attributes = instrumentation.getAttributesFromResult(result)
@@ -151,17 +152,40 @@ function createHandlerFlowFn<T extends Trigger, E extends Env, R extends any>(
 				if (instrumentation.executionSucces) {
 					instrumentation.executionSucces(span, trigger, result)
 				}
-				return result
+				if (instrumentation.instrumentResult) {
+					const instrumented = instrumentation.instrumentResult(result, api_context.active())
+					completion = instrumented.completion
+					result = instrumented.result
+				}
+				return result as R
 			} catch (error) {
-				span.recordException(error as Exception)
-				span.setStatus({ code: SpanStatusCode.ERROR })
+				recordSpanError(span, error)
 				if (instrumentation.executionFailed) {
 					instrumentation.executionFailed(span, trigger, error)
 				}
 				throw error
 			} finally {
-				span.end()
-				context.waitUntil(exportSpans(span.spanContext().traceId, tracker))
+				if (completion) {
+					context.waitUntil(
+						completion.then(
+							() => {
+								span.end()
+								return exportSpans(span.spanContext().traceId, tracker)
+							},
+							(error) => {
+								recordSpanError(span, error)
+								if (instrumentation.executionFailed) {
+									instrumentation.executionFailed(span, trigger, error)
+								}
+								span.end()
+								return exportSpans(span.spanContext().traceId, tracker)
+							},
+						),
+					)
+				} else {
+					span.end()
+					context.waitUntil(exportSpans(span.spanContext().traceId, tracker))
+				}
 			}
 		})
 
@@ -169,7 +193,7 @@ function createHandlerFlowFn<T extends Trigger, E extends Env, R extends any>(
 	}
 }
 
-function createHandlerProxy<T extends Trigger, E extends Env, R extends OrPromise<any>>(
+function createHandlerProxy<T extends Trigger, E extends Env, R extends any>(
 	handler: unknown,
 	handlerFn: HandlerFn<T, E, R>,
 	initialiser: Initialiser,

@@ -12,11 +12,17 @@ import {
 } from '@opentelemetry/api'
 import { sanitizeAttributes } from '@opentelemetry/core'
 import { Resource } from '@opentelemetry/resources'
-import { SpanProcessor, RandomIdGenerator, ReadableSpan, SamplingDecision } from '@opentelemetry/sdk-trace-base'
+import {
+	AlwaysOnSampler,
+	SpanProcessor,
+	RandomIdGenerator,
+	ReadableSpan,
+	SamplingDecision,
+} from '@opentelemetry/sdk-trace-base'
 
 import { SpanImpl } from './span.js'
-import { getActiveConfig } from './config.js'
-import { TraceFlushableSpanProcessor } from './types.js'
+import { getActiveConfig, setConfig } from './config.js'
+import { ResolvedTraceConfig, TraceFlushableSpanProcessor } from './types.js'
 
 enum NewTraceFlags {
 	RANDOM_TRACE_ID_SET = 2,
@@ -26,6 +32,7 @@ enum NewTraceFlags {
 type NewTraceFlagValues = NewTraceFlags.RANDOM_TRACE_ID_SET | NewTraceFlags.RANDOM_TRACE_ID_UNSET
 
 const idGenerator: RandomIdGenerator = new RandomIdGenerator()
+const defaultSampler = new AlwaysOnSampler()
 
 let withNextSpanAttributes: Attributes
 
@@ -36,7 +43,11 @@ function getFlagAt(flagSequence: number, position: number): number {
 export class WorkerTracer implements Tracer {
 	private readonly spanProcessors: TraceFlushableSpanProcessor[]
 	private readonly resource: Resource
-	constructor(spanProcessors: SpanProcessor[], resource: Resource) {
+	constructor(
+		spanProcessors: SpanProcessor[],
+		resource: Resource,
+		private readonly config?: ResolvedTraceConfig,
+	) {
 		this.spanProcessors = spanProcessors
 		this.resource = resource
 	}
@@ -57,15 +68,14 @@ export class WorkerTracer implements Tracer {
 			context = trace.deleteSpan(context)
 		}
 
-		const config = getActiveConfig(context)
-		if (!config) throw new Error('Config is undefined. This is a bug in the instrumentation logic')
+		const config = getActiveConfig(context) || this.config
 
 		const parentSpanContext = trace.getSpan(context)?.spanContext()
 		const { traceId, randomTraceFlag } = getTraceInfo(parentSpanContext)
 
 		const spanKind = options.kind || SpanKind.INTERNAL
 		const sanitisedAttrs = sanitizeAttributes(options.attributes)
-		const sampler = config.sampling.headSampler
+		const sampler = config?.sampling.headSampler || defaultSampler
 		const samplingDecision = sampler.shouldSample(context, traceId, name, spanKind, sanitisedAttrs, [])
 		const { decision, traceState, attributes: attrs } = samplingDecision
 
@@ -94,10 +104,11 @@ export class WorkerTracer implements Tracer {
 			spanKind,
 			startTime: options.startTime,
 		})
+		const processorContext = config ? setConfig(config, context) : context
 		this.spanProcessors.forEach((sp) => {
 			//Do not get me started on the idosyncracies of the Otel JS libraries.
 			//@ts-ignore
-			sp.onStart(span, context)
+			sp.onStart(span, processorContext)
 		})
 		return span
 	}

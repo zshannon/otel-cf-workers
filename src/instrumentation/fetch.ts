@@ -7,13 +7,15 @@ import {
 	Attributes,
 	Context,
 	Span,
-	Exception,
-	SpanStatusCode,
+	TextMapPropagator,
+	TextMapGetter,
+	TextMapSetter,
 } from '@opentelemetry/api'
 import { getActiveConfig } from '../config.js'
 import { wrap } from '../wrap.js'
-import { HandlerInstrumentation, OrPromise, ResolvedTraceConfig } from '../types.js'
+import { HandlerInstrumentation, ResolvedTraceConfig } from '../types.js'
 import { ReadableSpan } from '@opentelemetry/sdk-trace-base'
+import { instrumentResponseBody, recordSpanError } from './common.js'
 
 type IncomingRequest = Parameters<ExportedHandlerFetchHandler>[0]
 
@@ -33,6 +35,21 @@ export interface FetchHandlerConfig {
 }
 
 const netKeysFromCF = new Set(['colo', 'country', 'request_priority', 'tls_cipher', 'tls_version', 'asn', 'tcp_rtt'])
+
+const headersGetter: TextMapGetter<Headers> = {
+	get(headers, key) {
+		return headers.get(key) || undefined
+	},
+	keys(headers) {
+		return [...headers.keys()]
+	},
+}
+
+const headersSetter: TextMapSetter<Headers> = {
+	set(headers, key, value) {
+		headers.set(key, value)
+	},
+}
 
 const camelToSnakeCase = (s: string): string => {
 	return s.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
@@ -97,15 +114,10 @@ export function gatherIncomingCfAttributes(request: Request): Attributes {
 	return attrs
 }
 
-export function getParentContextFromHeaders(headers: Headers): Context {
-	return propagation.extract(api_context.active(), headers, {
-		get(headers, key) {
-			return headers.get(key) || undefined
-		},
-		keys(headers) {
-			return [...headers.keys()]
-		},
-	})
+export function getParentContextFromHeaders(headers: Headers, propagator?: TextMapPropagator): Context {
+	return propagator
+		? propagator.extract(api_context.active(), headers, headersGetter)
+		: propagation.extract(api_context.active(), headers, headersGetter)
 }
 
 function getParentContextFromRequest(request: Request) {
@@ -119,7 +131,9 @@ function getParentContextFromRequest(request: Request) {
 		typeof workerConfig.handlers.fetch.acceptTraceContext === 'function'
 			? workerConfig.handlers.fetch.acceptTraceContext(request)
 			: (workerConfig.handlers.fetch.acceptTraceContext ?? true)
-	return acceptTraceContext ? getParentContextFromHeaders(request.headers) : api_context.active()
+	return acceptTraceContext
+		? getParentContextFromHeaders(request.headers, workerConfig.propagator)
+		: api_context.active()
 }
 
 function updateSpanNameOnRoute(span: Span, request: IncomingRequest) {
@@ -130,7 +144,7 @@ function updateSpanNameOnRoute(span: Span, request: IncomingRequest) {
 	}
 }
 
-export const fetchInstrumentation: HandlerInstrumentation<IncomingRequest, OrPromise<Response>> = {
+export const fetchInstrumentation: HandlerInstrumentation<IncomingRequest, Response> = {
 	getInitialSpanInfo: (request) => {
 		const spanContext = getParentContextFromRequest(request)
 		const attributes = {
@@ -154,6 +168,7 @@ export const fetchInstrumentation: HandlerInstrumentation<IncomingRequest, OrPro
 	},
 	executionSucces: updateSpanNameOnRoute,
 	executionFailed: updateSpanNameOnRoute,
+	instrumentResult: instrumentResponseBody,
 }
 
 type getFetchConfig = (config: ResolvedTraceConfig) => FetcherConfig
@@ -182,27 +197,43 @@ export function instrumentClientFetch(
 			const method = request.method.toUpperCase()
 			const spanName = typeof attrs?.['name'] === 'string' ? attrs?.['name'] : `fetch ${method} ${host}`
 			const promise = tracer.startActiveSpan(spanName, options, async (span) => {
+				let completion: Promise<void> | undefined
+				let ended = false
+				const responseContext = api_context.active()
+				const finish = (error?: unknown) => {
+					if (ended) return
+					ended = true
+					if (error !== undefined) {
+						recordSpanError(span, error)
+					}
+					span.end()
+				}
 				try {
 					const includeTraceContext =
 						typeof config.includeTraceContext === 'function'
 							? config.includeTraceContext(request)
 							: config.includeTraceContext
 					if (includeTraceContext ?? true) {
-						propagation.inject(api_context.active(), request.headers, {
-							set: (h, k, v) => h.set(k, typeof v === 'string' ? v : String(v)),
-						})
+						workerConfig.propagator.inject(api_context.active(), request.headers, headersSetter)
 					}
 					span.setAttributes(gatherRequestAttributes(request))
 					if (request.cf) span.setAttributes(gatherOutgoingCfAttributes(request.cf))
 					const response = await Reflect.apply(target, thisArg, [request])
 					span.setAttributes(gatherResponseAttributes(response))
-					return response
+					const instrumented = instrumentResponseBody(response, responseContext)
+					completion = instrumented.completion
+					if (completion) {
+						void completion.then(
+							() => finish(),
+							(error) => finish(error),
+						)
+					}
+					return instrumented.result
 				} catch (error: unknown) {
-					span.recordException(error as Exception)
-					span.setStatus({ code: SpanStatusCode.ERROR })
+					finish(error)
 					throw error
 				} finally {
-					span.end()
+					if (!completion) finish()
 				}
 			})
 			return promise

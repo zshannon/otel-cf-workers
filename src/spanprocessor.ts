@@ -20,16 +20,18 @@ class TraceState {
 	private exportPromises: Promise<void>[] = []
 	private localRootSpan?: ReadableSpan
 	private traceDecision?: boolean
+	private tailSampler?: TailSampleFn
 
 	constructor(exporter: SpanExporter) {
 		this.exporter = exporter
 	}
 
-	addSpan(span: Span): void {
+	addSpan(span: Span, tailSampler?: TailSampleFn): void {
 		const readableSpan = span as unknown as ReadableSpan
 		this.localRootSpan = this.localRootSpan || readableSpan
 		this.unexportedSpans.push(readableSpan)
 		this.inprogressSpans.add(span.spanContext().spanId)
+		this.tailSampler ||= tailSampler
 	}
 
 	endSpan(span: ReadableSpan): void {
@@ -41,7 +43,7 @@ class TraceState {
 
 	sample() {
 		if (this.traceDecision === undefined && this.unexportedSpans.length > 0) {
-			const sampler = getSampler()
+			const sampler = this.tailSampler || getSampler()
 			this.traceDecision = sampler({
 				traceId: this.localRootSpan!.spanContext().traceId,
 				localRootSpan: this.localRootSpan!,
@@ -99,9 +101,9 @@ export class BatchTraceSpanProcessor implements TraceFlushableSpanProcessor {
 		return traceState
 	}
 
-	onStart(span: Span, _parentContext: Context): void {
+	onStart(span: Span, parentContext: Context): void {
 		const traceId = span.spanContext().traceId
-		this.getTraceState(traceId).addSpan(span)
+		this.getTraceState(traceId).addSpan(span, getActiveConfig(parentContext)?.sampling.tailSampler)
 	}
 
 	onEnd(span: ReadableSpan): void {
@@ -113,7 +115,7 @@ export class BatchTraceSpanProcessor implements TraceFlushableSpanProcessor {
 		if (traceId) {
 			await this.getTraceState(traceId).flush()
 		} else {
-			const promises = Object.values(this.traces).map((traceState: TraceState) => traceState.flush)
+			const promises = Object.values(this.traces).map((traceState: TraceState) => traceState.flush())
 			await Promise.allSettled(promises)
 		}
 	}

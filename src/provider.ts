@@ -5,6 +5,7 @@ import { Resource } from '@opentelemetry/resources'
 
 import { AsyncLocalStorageContextManager } from './context.js'
 import { WorkerTracer } from './tracer.js'
+import { ResolvedTraceConfig } from './types.js'
 
 /**
  * Register this TracerProvider for use with the OpenTelemetry API.
@@ -18,7 +19,11 @@ export class WorkerTracerProvider implements TracerProvider {
 	private resource: Resource
 	private tracers: Record<string, Tracer> = {}
 
-	constructor(spanProcessors: SpanProcessor[], resource: Resource) {
+	constructor(
+		spanProcessors: SpanProcessor[],
+		resource: Resource,
+		private readonly config?: ResolvedTraceConfig,
+	) {
 		this.spanProcessors = spanProcessors
 		this.resource = resource
 	}
@@ -26,7 +31,7 @@ export class WorkerTracerProvider implements TracerProvider {
 	getTracer(name: string, version?: string, options?: TracerOptions): Tracer {
 		const key = `${name}@${version || ''}:${options?.schemaUrl || ''}`
 		if (!this.tracers[key]) {
-			this.tracers[key] = new WorkerTracer(this.spanProcessors, this.resource)
+			this.tracers[key] = new WorkerTracer(this.spanProcessors, this.resource, this.config)
 		}
 		return this.tracers[key]!
 	}

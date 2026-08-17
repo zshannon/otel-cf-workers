@@ -4,7 +4,7 @@ import {
 	ATTR_MESSAGING_DESTINATION_NAME,
 	ATTR_RPC_MESSAGE_ID,
 } from '@opentelemetry/semantic-conventions/incubating'
-import { HandlerInstrumentation, OrPromise } from '../types'
+import { HandlerInstrumentation } from '../types'
 
 /**
  * Converts the message headers into a record ready to be injected
@@ -21,7 +21,7 @@ function headerAttributes(message: { headers: Headers }): Record<string, unknown
 	return Object.fromEntries([...message.headers].map(([key, value]) => [`email.header.${key}`, value] as const))
 }
 
-export const emailInstrumentation: HandlerInstrumentation<ForwardableEmailMessage, OrPromise<void>> = {
+export const emailInstrumentation: HandlerInstrumentation<ForwardableEmailMessage, void> = {
 	getInitialSpanInfo: (message) => {
 		const attributes = {
 			[ATTR_FAAS_TRIGGER]: 'other',

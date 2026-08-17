@@ -1,4 +1,12 @@
-import { Attributes, Context, SpanOptions, TextMapPropagator, Span } from '@opentelemetry/api'
+import {
+	Attributes,
+	Context,
+	Span,
+	SpanOptions,
+	TextMapGetter,
+	TextMapPropagator,
+	TextMapSetter,
+} from '@opentelemetry/api'
 import { ReadableSpan, Sampler, SpanExporter, SpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { OTLPExporterConfig } from './exporter.js'
 import { FetchHandlerConfig, FetcherConfig } from './instrumentation/fetch.js'
@@ -21,16 +29,35 @@ export interface InitialSpanInfo {
 
 export interface HandlerInstrumentation<T extends Trigger, R extends any> {
 	getInitialSpanInfo: (trigger: T) => InitialSpanInfo
-	getAttributesFromResult?: (result: Awaited<R>) => Attributes
+	getAttributesFromResult?: (result: R) => Attributes
+	instrumentResult?: (result: R, context: Context) => InstrumentedResult<R>
 	instrumentTrigger?: (trigger: T) => T
-	executionSucces?: (span: Span, trigger: T, result: Awaited<R>) => void
+	executionSucces?: (span: Span, trigger: T, result: R) => void
 	executionFailed?: (span: Span, trigger: T, error?: any) => void
+}
+
+export interface InstrumentedResult<R> {
+	completion?: Promise<void>
+	result: R
 }
 
 export type TraceFlushableSpanProcessor = SpanProcessor & { forceFlush: (traceId?: string) => Promise<void> }
 
 export interface HandlerConfig {
 	fetch?: FetchHandlerConfig
+}
+
+export type RPCCarrierHook = (args: readonly unknown[]) => unknown | undefined
+
+export interface RPCInstrumentationConfig {
+	/** Return the application-owned carrier sent as part of the RPC arguments. */
+	carrier?: RPCCarrierHook
+	/** Read propagation fields from the carrier. Defaults to direct object access. */
+	getter?: TextMapGetter
+	/** Write propagation fields to the carrier. Defaults to direct object assignment. */
+	setter?: TextMapSetter
+	/** Resolve a service-binding name to the RPC interface name used by the server. */
+	serviceName?: (binding: string) => string
 }
 
 export interface ServiceConfig {
@@ -62,6 +89,7 @@ interface TraceConfigBase {
 	postProcessor?: PostProcessorFn
 	sampling?: SamplingConfig
 	propagator?: TextMapPropagator
+	rpc?: RPCInstrumentationConfig
 	instrumentation?: InstrumentationOptions
 }
 
@@ -86,6 +114,7 @@ export interface ResolvedTraceConfig extends TraceConfigBase {
 	sampling: Required<SamplingConfig<Sampler>>
 	spanProcessors: SpanProcessor[]
 	propagator: TextMapPropagator
+	rpc: RPCInstrumentationConfig
 	instrumentation: InstrumentationOptions
 }
 

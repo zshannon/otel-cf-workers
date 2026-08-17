@@ -1,6 +1,6 @@
 import { trace, SpanKind, Attributes, Span } from '@opentelemetry/api'
 import { unwrap, wrap } from '../wrap.js'
-import { HandlerInstrumentation, InitialSpanInfo, OrPromise } from '../types.js'
+import { HandlerInstrumentation, InitialSpanInfo } from '../types.js'
 import { ATTR_FAAS_TRIGGER, FAAS_TRIGGER_VALUE_PUBSUB } from '@opentelemetry/semantic-conventions/incubating'
 
 type QueueHandler = ExportedHandlerQueueHandler<unknown, unknown>
@@ -133,7 +133,7 @@ const proxyMessageBatch = (batch: MessageBatch, count: MessageStatusCount) => {
 	return wrap(batch, batchHandler)
 }
 
-export class QueueInstrumentation implements HandlerInstrumentation<MessageBatch, OrPromise<void>> {
+export class QueueInstrumentation implements HandlerInstrumentation<MessageBatch, void> {
 	private count?: MessageStatusCount
 
 	getInitialSpanInfo(batch: MessageBatch): InitialSpanInfo {

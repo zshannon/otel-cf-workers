@@ -2,7 +2,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import { beforeEach, describe, expect, test, vitest } from 'vitest'
 import { AsyncLocalStorageContextManager } from '../../src/context'
 import { instrumentStorage } from '../../src/instrumentation/do-storage'
-import { context, trace } from '@opentelemetry/api'
+import { context, ROOT_CONTEXT, trace } from '@opentelemetry/api'
 
 const exporter = new InMemorySpanExporter()
 
@@ -481,4 +481,21 @@ test('sync', async () => {
 		  "operation": "sync",
 		}
 	`)
+})
+
+test('keeps the transaction span active inside the platform callback', async () => {
+	storage.transaction.mockImplementation((callback) =>
+		context.with(ROOT_CONTEXT, callback, undefined, {} as DurableObjectTransaction),
+	)
+	const instrument = instrumentStorage(storage)
+
+	await instrument.transaction(async () => {
+		const child = trace.getTracer('application').startSpan('transaction callback')
+		child.end()
+	})
+
+	const spans = exporter.getFinishedSpans()
+	const transaction = spans.find(({ name }) => name === 'Durable Object Storage transaction')
+	const callback = spans.find(({ name }) => name === 'transaction callback')
+	expect(callback?.parentSpanContext?.spanId).toBe(transaction?.spanContext().spanId)
 })

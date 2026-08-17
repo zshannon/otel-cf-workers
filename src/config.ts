@@ -62,6 +62,7 @@ export function parseConfig(supplied: TraceConfig): ResolvedTraceConfig {
 			service: supplied.service,
 			spanProcessors,
 			propagator: supplied.propagator || new W3CTraceContextPropagator(),
+			rpc: supplied.rpc || {},
 			instrumentation: {
 				instrumentGlobalCache: supplied.instrumentation?.instrumentGlobalCache ?? true,
 				instrumentGlobalFetch: supplied.instrumentation?.instrumentGlobalFetch ?? true,

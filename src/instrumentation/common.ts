@@ -1,4 +1,4 @@
-import { trace } from '@opentelemetry/api'
+import { Context, Exception, Span, SpanStatusCode, context as api_context, trace } from '@opentelemetry/api'
 import { WorkerTracer } from '../tracer.js'
 import { passthroughGet, wrap } from '../wrap.js'
 
@@ -55,6 +55,67 @@ export async function exportSpans(traceId?: string, tracker?: PromiseTracker) {
 	} else {
 		console.error('The global tracer is not of type WorkerTracer and can not export spans')
 	}
+}
+
+export function recordSpanError(span: Span, error: unknown): void {
+	const exception = error instanceof Error ? error : new Error(String(error))
+	span.recordException(exception as Exception)
+	span.setAttribute('error.type', exception.name)
+	span.setStatus({ code: SpanStatusCode.ERROR })
+}
+
+export function instrumentResponseBody(
+	response: Response,
+	responseContext: Context,
+): { completion?: Promise<void>; result: Response } {
+	if (!response.body) return { result: response }
+
+	const reader = response.body.getReader()
+	let settled = false
+	let resolveCompletion!: () => void
+	let rejectCompletion!: (error: unknown) => void
+	const completion = new Promise<void>((resolve, reject) => {
+		resolveCompletion = resolve
+		rejectCompletion = reject
+	})
+	const settle = (error?: unknown) => {
+		if (settled) return
+		settled = true
+		if (error === undefined) {
+			resolveCompletion()
+		} else {
+			rejectCompletion(error)
+		}
+	}
+
+	const body = new ReadableStream({
+		type: 'bytes',
+		async pull(controller) {
+			try {
+				const result = await api_context.with(responseContext, () => reader.read())
+				if (result.done) {
+					controller.close()
+					settle()
+				} else {
+					controller.enqueue(result.value)
+				}
+			} catch (error) {
+				settle(error)
+				controller.error(error)
+			}
+		},
+		async cancel(reason) {
+			try {
+				await api_context.with(responseContext, () => reader.cancel(reason))
+			} catch (error) {
+				settle(error)
+				throw error
+			}
+			settle(reason instanceof Error ? reason : new Error(reason ? String(reason) : 'Response body cancelled'))
+		},
+	})
+
+	return { completion, result: new Response(body, response) }
 }
 
 /** Like `Promise.allSettled`, but handles modifications to the promises array */

@@ -9,9 +9,10 @@ import {
 	instrumentClientFetch,
 } from './fetch.js'
 import { instrumentEnv } from './env.js'
-import { Initialiser, setConfig } from '../config.js'
+import { getActiveConfig, Initialiser, setConfig } from '../config.js'
 import { instrumentStorage } from './do-storage.js'
 import { DOConstructorTrigger } from '../types.js'
+import { exportSpans, instrumentResponseBody, recordSpanError } from './common.js'
 
 import { DurableObject as DurableObjectClass } from 'cloudflare:workers'
 
@@ -70,6 +71,9 @@ export function instrumentState(state: DurableObjectState) {
 			const result = Reflect.get(target, prop, unwrap(receiver))
 			if (prop === 'storage') {
 				return instrumentStorage(result)
+			} else if (prop === 'blockConcurrencyWhile' && typeof result === 'function') {
+				return (callback: () => Promise<unknown>) =>
+					Reflect.apply(result, target, [api_context.bind(api_context.active(), callback)])
 			} else if (typeof result === 'function') {
 				return result.bind(target)
 			} else {
@@ -81,8 +85,13 @@ export function instrumentState(state: DurableObjectState) {
 }
 
 let cold_start = true
-export function executeDOFetch(fetchFn: FetchFn, request: Request, id: DurableObjectId): Promise<Response> {
-	const spanContext = getParentContextFromHeaders(request.headers)
+export function executeDOFetch(
+	fetchFn: FetchFn,
+	request: Request,
+	id: DurableObjectId,
+	waitUntil?: ExecutionContext['waitUntil'],
+): Promise<Response> {
+	const spanContext = getParentContextFromHeaders(request.headers, getActiveConfig()?.propagator)
 
 	const tracer = trace.getTracer('DO fetchHandler')
 	const attributes = {
@@ -99,20 +108,37 @@ export function executeDOFetch(fetchFn: FetchFn, request: Request, id: DurableOb
 
 	const name = id.name || ''
 	const promise = tracer.startActiveSpan(`Durable Object Fetch ${name}`, options, spanContext, async (span) => {
+		let completion: Promise<void> | undefined
 		try {
 			const response: Response = await fetchFn(request)
 			if (response.ok) {
 				span.setStatus({ code: SpanStatusCode.OK })
 			}
 			span.setAttributes(gatherResponseAttributes(response))
-			span.end()
-
-			return response
+			const instrumented = instrumentResponseBody(response, api_context.active())
+			completion = instrumented.completion
+			return instrumented.result
 		} catch (error) {
-			span.recordException(error as Exception)
-			span.setStatus({ code: SpanStatusCode.ERROR })
-			span.end()
+			recordSpanError(span, error)
 			throw error
+		} finally {
+			if (completion) {
+				const lifecycle = completion.then(
+					() => {
+						span.end()
+						return waitUntil ? exportSpans(span.spanContext().traceId) : undefined
+					},
+					(error) => {
+						recordSpanError(span, error)
+						span.end()
+						return waitUntil ? exportSpans(span.spanContext().traceId) : undefined
+					},
+				)
+				waitUntil?.(lifecycle)
+			} else {
+				span.end()
+				waitUntil?.(exportSpans(span.spanContext().traceId))
+			}
 		}
 	})
 	return promise
@@ -141,7 +167,13 @@ export function executeDOAlarm(alarmFn: NonNullable<AlarmFn>, id: DurableObjectI
 	return promise
 }
 
-function instrumentFetchFn(fetchFn: FetchFn, initialiser: Initialiser, env: Env, id: DurableObjectId): FetchFn {
+function instrumentFetchFn(
+	fetchFn: FetchFn,
+	initialiser: Initialiser,
+	env: Env,
+	id: DurableObjectId,
+	waitUntil: ExecutionContext['waitUntil'],
+): FetchFn {
 	const fetchHandler: ProxyHandler<FetchFn> = {
 		async apply(target, thisArg, argArray: Parameters<FetchFn>) {
 			const request = argArray[0]
@@ -149,7 +181,7 @@ function instrumentFetchFn(fetchFn: FetchFn, initialiser: Initialiser, env: Env,
 			const context = setConfig(config)
 			try {
 				const bound = target.bind(unwrap(thisArg))
-				return await api_context.with(context, executeDOFetch, undefined, bound, request, id)
+				return await api_context.with(context, executeDOFetch, undefined, bound, request, id, waitUntil)
 			} catch (error) {
 				throw error
 			}
@@ -210,14 +242,13 @@ function instrumentDurableObject(
 				return env
 			} else if (prop === 'fetch') {
 				const fetchFn = Reflect.get(target, prop)
-				return instrumentFetchFn(fetchFn, initialiser, env, state.id)
+				return instrumentFetchFn(fetchFn, initialiser, env, state.id, state.waitUntil.bind(state))
 			} else if (prop === 'alarm') {
 				const alarmFn = Reflect.get(target, prop)
 				return instrumentAlarmFn(alarmFn, initialiser, env, state.id)
 			} else {
 				const result = Reflect.get(target, prop)
 				if (typeof result === 'function') {
-					result.bind(doObj)
 					return instrumentAnyFn(result, initialiser, env, state.id)
 				}
 				return result
@@ -242,11 +273,7 @@ export function instrumentDOClass<C extends DOClass>(doClass: C, initialiser: In
 			const env = instrumentEnv(orig_env)
 			const classStyle = doClass.prototype instanceof DurableObjectClass
 			const createDO = () => {
-				if (classStyle) {
-					return new target(orig_state, orig_env)
-				} else {
-					return new target(state, env)
-				}
+				return classStyle ? new target(orig_state, orig_env) : new target(state, env)
 			}
 			const doObj = api_context.with(context, createDO)
 

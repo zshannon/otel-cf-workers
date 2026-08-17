@@ -263,6 +263,38 @@ const config: ResolveConfigFn = (env: Env, _trigger) => {
 }
 ```
 
+### WorkerEntrypoint RPC
+
+WorkerEntrypoint RPC calls can propagate context through an application-owned
+structured-cloneable carrier. The same carrier hook must be configured in the
+caller and callee. The configured OpenTelemetry propagator performs the
+injection and extraction; the library does not parse trace headers itself.
+
+```typescript
+type RpcArgs = {
+	traceContext: Record<string, string>
+	value: string
+}
+
+const config: ResolveConfigFn = (env, _trigger) => ({
+	// exporter configuration omitted
+	service: { name: 'persistence' },
+	rpc: {
+		carrier: (args) => (args[0] as RpcArgs).traceContext,
+		serviceName: (binding) => (binding === 'PERSISTENCE' ? 'PersistenceEntrypoint' : binding),
+	},
+})
+```
+
+RPC spans use the `rpc.system.name` and fully-qualified `rpc.method`
+attributes, with span names in the `{service}/{method}` form.
+
+Plain objects use OpenTelemetry's default text-map getter and setter. If the
+carrier is another type, such as `Headers`, provide the corresponding standard
+OpenTelemetry `getter` and `setter` in `rpc` alongside the carrier hook.
+Use `serviceName` when a service-binding name differs from the target
+`WorkerEntrypoint` class name so client and server `rpc.method` values match.
+
 ## Distributed Tracing
 
 One of the advantages of using Open Telemetry is that it makes it easier to do distributed tracing through multiple different services. This library will automatically inject the W3C Trace Context headers when making calls to Durable Objects or outbound fetch calls.

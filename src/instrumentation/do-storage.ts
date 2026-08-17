@@ -1,4 +1,4 @@
-import { Attributes, SpanKind, SpanOptions, trace } from '@opentelemetry/api'
+import { Attributes, context, SpanKind, SpanOptions, trace } from '@opentelemetry/api'
 import { SemanticAttributes } from '@opentelemetry/semantic-conventions'
 import { wrap } from '../wrap.js'
 import { Overloads } from './common.js'
@@ -177,7 +177,11 @@ function instrumentStorageFn(fn: Function, operation: string) {
 				},
 			}
 			return tracer.startActiveSpan(`Durable Object Storage ${operation}`, options, async (span) => {
-				const result = await Reflect.apply(target, thisArg, argArray)
+				const boundArgs =
+					operation === 'transaction' && typeof argArray[0] === 'function'
+						? [context.bind(context.active(), argArray[0]), ...argArray.slice(1)]
+						: argArray
+				const result = await Reflect.apply(target, thisArg, boundArgs)
 				const extraAttrsFn = StorageAttributes[operation]
 				const extraAttrs = extraAttrsFn ? extraAttrsFn(argArray, result) : {}
 				span.setAttributes(extraAttrs)

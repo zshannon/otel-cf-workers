@@ -1,9 +1,10 @@
-import { context, type Exception, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api'
+import { context, SpanKind, trace } from '@opentelemetry/api'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 
 import { type Initialiser, setConfig } from '../config.js'
 import type { RPCTrigger } from '../types.js'
-import { exportSpans } from './common.js'
+import { exportSpans, instrumentResponseBody, recordSpanError } from './common.js'
+import { extractRPCContext, rpcSpanAttributes, rpcSpanName } from './rpc.js'
 
 type Entrypoint = WorkerEntrypoint<any>
 export type EntrypointClass = new (ctx: ExecutionContext, env: any) => Entrypoint
@@ -21,29 +22,48 @@ export function instrumentEntrypointClass<C extends EntrypointClass>(entrypointC
 				const env = Reflect.get(this, 'env')
 				const trigger: RPCTrigger = { method: property, type: 'rpc' }
 				const config = initialiser(env, trigger)
-				const service = config.service.name
-				const invocationContext = setConfig(config)
+				const service = entrypointClass.name
+				const parentContext = extractRPCContext(context.active(), args, config)
+				const invocationContext = setConfig(config, parentContext)
 				return context.with(invocationContext, () =>
 					trace.getTracer('RPC').startActiveSpan(
-						`RPC ${service}.${property}`,
+						rpcSpanName(service, property),
 						{
-							attributes: {
-								'rpc.method': property,
-								'rpc.service': service,
-								'rpc.system': 'cloudflare',
-							},
+							attributes: rpcSpanAttributes(service, property),
 							kind: SpanKind.SERVER,
 						},
 						async (span) => {
+							let completion: Promise<void> | undefined
 							try {
-								return await Reflect.apply(method, this, args)
+								const result = await Reflect.apply(method, this, args)
+								if (result instanceof Response) {
+									const instrumented = instrumentResponseBody(result, context.active())
+									completion = instrumented.completion
+									return instrumented.result
+								}
+								return result
 							} catch (error) {
-								span.recordException(error as Exception)
-								span.setStatus({ code: SpanStatusCode.ERROR })
+								recordSpanError(span, error)
 								throw error
 							} finally {
-								span.end()
-								ctx.waitUntil(exportSpans(span.spanContext().traceId))
+								if (completion) {
+									ctx.waitUntil(
+										completion.then(
+											() => {
+												span.end()
+												return exportSpans(span.spanContext().traceId)
+											},
+											(error) => {
+												recordSpanError(span, error)
+												span.end()
+												return exportSpans(span.spanContext().traceId)
+											},
+										),
+									)
+								} else {
+									span.end()
+									ctx.waitUntil(exportSpans(span.spanContext().traceId))
+								}
 							}
 						},
 					),
