@@ -1,5 +1,11 @@
 # @zshannon/otel-cf-workers
 
+## 1.0.0-rc.54
+
+### Patch Changes
+
+- d180d46: Skip zero-length source chunks while instrumenting streamed response bodies so Workers byte streams continue to the next payload chunk instead of throwing or stalling.
+
 ## 1.0.0-rc.53
 
 ### Minor Changes
