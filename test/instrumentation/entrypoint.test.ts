@@ -17,7 +17,7 @@ test('records a standard RPC server span with propagated parentage and nested wo
 	const waitUntil = vi.fn<ExecutionContext['waitUntil']>()
 	const triggers: RPCTrigger[] = []
 
-	class PersistenceEntrypoint extends WorkerEntrypoint {
+	class PersistenceEntrypoint$1 extends WorkerEntrypoint {
 		async ingestAuthorizationEvents({ events }: IngestArgs): Promise<number> {
 			return trace.getTracer('database').startActiveSpan('database.models.user.ingest', async (span) => {
 				span.end()
@@ -55,14 +55,17 @@ test('records a standard RPC server span with propagated parentage and nested wo
 		}
 	}
 
-	const InstrumentedPersistenceEntrypoint = instrumentEntrypoint(PersistenceEntrypoint, (_env, trigger) => {
+	const InstrumentedPersistenceEntrypoint = instrumentEntrypoint(PersistenceEntrypoint$1, (_env, trigger) => {
 		if (typeof trigger === 'object' && 'type' in trigger && trigger.type === 'rpc') triggers.push(trigger)
 		return {
 			instrumentation: {
 				instrumentGlobalCache: false,
 				instrumentGlobalFetch: false,
 			},
-			rpc: { carrier: (args) => (args[0] as IngestArgs | StreamArgs).traceContext },
+			rpc: {
+				carrier: (args) => (args[0] as IngestArgs | StreamArgs).traceContext,
+				serviceName: (service) => (service === 'PersistenceEntrypoint$1' ? 'PersistenceEntrypoint' : service),
+			},
 			service: { name: 'persistence-test' },
 			spanProcessors: [new SimpleSpanProcessor(exporter)],
 		}

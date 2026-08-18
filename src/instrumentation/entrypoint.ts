@@ -4,7 +4,7 @@ import { WorkerEntrypoint } from 'cloudflare:workers'
 import { type Initialiser, setConfig } from '../config.js'
 import type { RPCTrigger } from '../types.js'
 import { exportSpans, instrumentResponseBody, recordSpanError } from './common.js'
-import { extractRPCContext, rpcSpanAttributes, rpcSpanName } from './rpc.js'
+import { extractRPCContext, rpcServiceName, rpcSpanAttributes, rpcSpanName } from './rpc.js'
 
 type Entrypoint = WorkerEntrypoint<any>
 export type EntrypointClass = new (ctx: ExecutionContext, env: any) => Entrypoint
@@ -22,7 +22,7 @@ export function instrumentEntrypointClass<C extends EntrypointClass>(entrypointC
 				const env = Reflect.get(this, 'env')
 				const trigger: RPCTrigger = { method: property, type: 'rpc' }
 				const config = initialiser(env, trigger)
-				const service = entrypointClass.name
+				const service = rpcServiceName(entrypointClass.name, config)
 				const parentContext = extractRPCContext(context.active(), args, config)
 				const invocationContext = setConfig(config, parentContext)
 				return context.with(invocationContext, () =>
