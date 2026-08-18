@@ -92,12 +92,17 @@ export function instrumentResponseBody(
 		type: 'bytes',
 		async pull(controller) {
 			try {
-				const result = await api_context.with(responseContext, () => reader.read())
-				if (result.done) {
-					controller.close()
-					settle()
-				} else {
-					controller.enqueue(result.value)
+				while (true) {
+					const result = await api_context.with(responseContext, () => reader.read())
+					if (result.done) {
+						controller.close()
+						settle()
+						return
+					}
+					if (result.value.byteLength > 0) {
+						controller.enqueue(result.value)
+						return
+					}
 				}
 			} catch (error) {
 				settle(error)

@@ -66,6 +66,28 @@ test('keeps the server span open and callback context active until a byte stream
 	expect(spans.find(({ name }) => name === 'lazy work')?.parentSpanContext?.spanId).toBe(span.spanContext().spanId)
 })
 
+test('skips empty response chunks', async () => {
+	let pullCount = 0
+	const instrumented = instrumentResponseBody(
+		new Response(
+			new ReadableStream<Uint8Array>({
+				pull(controller) {
+					if (pullCount++ === 0) {
+						controller.enqueue(new Uint8Array())
+						return
+					}
+					controller.enqueue(encoder.encode('hello'))
+					controller.close()
+				},
+			}),
+		),
+		context.active(),
+	)
+
+	expect(await instrumented.result.text()).toBe('hello')
+	await expect(instrumented.completion).resolves.toBeUndefined()
+})
+
 test('ends and records a streamed response error', async () => {
 	const { exporter, observe, responseContext } = setup()
 	const error = new Error('stream failed')
