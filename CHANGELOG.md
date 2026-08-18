@@ -1,5 +1,11 @@
 # @zshannon/otel-cf-workers
 
+## 1.0.0-rc.55
+
+### Patch Changes
+
+- 4382726: Apply the configured RPC service-name resolver to WorkerEntrypoint server spans so bundle-generated class names do not leak into telemetry.
+
 ## 1.0.0-rc.54
 
 ### Patch Changes
